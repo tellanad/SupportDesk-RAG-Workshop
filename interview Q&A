@@ -1,0 +1,174 @@
+# Embeddings Interview Questions & Answers
+
+## 1. What is a text embedding, and why is it useful in RAG?
+
+**Answer:** A text embedding is a learned numerical representation of text. A retrieval embedding model maps queries and document passages into a compatible vector space so that relevant passages can be retrieved using similarity scores. This allows a question such as "I cannot sign in" to retrieve an article about login troubleshooting even when the wording differs.
+
+An embedding captures useful patterns learned during training. It does not guarantee factual correctness or preserve every detail of the original text. In a typical text RAG pipeline, we retrieve the original passages associated with the vectors and provide those passages to the generation model.
+
+## 2. How are tokenization, token embeddings, and document embeddings different?
+
+**Answer:** Tokenization splits text into tokens and maps them to integer IDs. Those IDs identify vocabulary entries; their numerical distance does not express semantic similarity.
+
+Inside a neural language model, token IDs are mapped to learned vectors and processed into contextual representations. A retrieval embedding model produces a fixed-length representation of an entire query or passage, using a model-specific architecture and aggregation method. That passage vector is what we typically index for dense retrieval. The tokenizer's vocabulary size and the retrieval vector's dimension are different concepts.
+
+## 3. What does an embedding dimension represent? Are more dimensions always better?
+
+**Answer:** A dimension is one coordinate in a learned representation. Individual coordinates usually do not have simple, reliable labels such as "billing" or "passwords"; information is distributed across coordinates.
+
+More dimensions increase raw vector storage and the work required for direct vector comparisons. They can improve retrieval quality, but that improvement depends on the model and task. I would benchmark dimension choices using the same corpus and labeled queries, then select the smallest configuration that meets the quality and latency requirements.
+
+## 4. What is the difference between cosine similarity, dot product, and Euclidean distance?
+
+**Answer:** Cosine similarity compares vector direction and removes the effect of magnitude. Dot product depends on both direction and magnitude. Euclidean distance measures straight-line distance between vectors.
+
+For unit-normalized vectors:
+
+```text
+cosine(q, d) = q · d
+squared_L2(q, d) = 2 - 2(q · d)
+```
+
+Therefore, maximizing cosine or dot product and minimizing Euclidean distance produce the same exact ranking. Without normalization, this equivalence does not generally hold. I would use the scoring convention expected by the embedding model and verify whether the database returns similarity, distance, or a transformed score.
+
+[Faiss metric documentation](https://github.com/facebookresearch/faiss/wiki/MetricType-and-distances) explains these relationships. [OpenAI's embeddings guide](https://developers.openai.com/api/docs/guides/embeddings) documents its embeddings as unit normalized.
+
+## 5. If cosine similarity measures similarity, why do we need KNN or ANN?
+
+**Answer:** A similarity metric defines how to score two vectors. Nearest-neighbor search finds the best-scoring vectors in a collection.
+
+Exact nearest-neighbor search returns the true top results under the chosen metric. A brute-force implementation compares the query with every vector. Approximate nearest-neighbor search, or ANN, uses an index to reduce search work and may miss some exact neighbors. I would choose and tune the index based on measured latency, memory use, and recall relative to an exact-search baseline.
+
+The metric and the search method solve different parts of retrieval and are used together.
+
+## 6. Can we compare vectors from two different models if both have the same dimensions?
+
+**Answer:** Matching dimensions are necessary for a direct vector comparison but do not establish semantic compatibility. Independently trained models generally learn different coordinate spaces. Their vectors should not be mixed in one similarity search merely because they have the same length.
+
+Queries and documents must use a compatible encoder configuration. Some retrieval systems intentionally use separately trained query and document encoders that share an aligned space; those are valid paired systems. I would version the model, dimensions, preprocessing, and any required query/document instructions together.
+
+## 7. How would you choose an embedding model for an enterprise application?
+
+**Answer:** I would first define the workload: document types, query patterns, languages, identifiers, access constraints, latency target, and cost budget. Then I would build a representative evaluation set with relevant passages labeled for each query.
+
+I would compare candidate models while holding the corpus, chunking, and retrieval settings constant. The decision would consider retrieval quality, query latency, ingestion throughput, storage, hosting requirements, and operational cost. I would inspect results by query category because a strong overall average can hide failures on important customer workflows. Public benchmarks help shortlist models; the enterprise evaluation determines the choice.
+
+## 8. Which metrics would you use to evaluate embeddings for retrieval?
+
+**Answer:** I would use a labeled query-to-passage evaluation set and measure:
+
+- **Recall@k:** The fraction of relevant passages retrieved in the top k results.
+- **Precision@k:** The fraction of the top k results that are relevant.
+- **MRR:** The average reciprocal rank of the first relevant result, using zero when no relevant result is found within the evaluated range.
+- **nDCG@k:** Ranking quality that rewards highly relevant results near the top and supports graded relevance labels.
+
+I would also measure latency and cost. Separately, I would evaluate final answer correctness and whether answers are supported by the retrieved evidence. Strong retrieval metrics do not guarantee a good generated answer.
+
+## 9. How would you distinguish an embedding problem from an ANN index problem?
+
+**Answer:** I would run the same queries against an exact-search baseline using the same vectors, metric, and filters. If exact search retrieves the relevant passages but ANN misses them, I would investigate index configuration, search parameters, quantization, or filtering behavior.
+
+If both miss the relevant passages, I would inspect the source data, chunk boundaries, model compatibility, query formulation, and embedding suitability. I would distinguish ANN recall against exact neighbors from relevance recall against human labels: reproducing the exact vector ranking does not prove that ranking is useful.
+
+## 10. Does a cosine score of 0.85 mean a result has an 85% chance of being correct?
+
+**Answer:** No. Cosine similarity is a geometric score, not a calibrated probability of relevance or answer correctness. A highly similar passage might describe the wrong product version, an outdated policy, or the opposite instruction.
+
+I would tune any relevance threshold on labeled queries and include hard negatives: passages that look relevant but are incorrect for the question. I would also evaluate no-answer cases. Thresholds should be revalidated after changes to the embedding model, corpus, chunking, or scoring pipeline.
+
+## 11. Why can semantic search work for natural-language questions but fail on error codes or circuit IDs?
+
+**Answer:** A dense model can recognize a shared topic while failing to prioritize the exact identifier that determines the correct result. For example, two troubleshooting articles can be semantically similar even though one covers `E104` and the other covers `E140`.
+
+I would preserve identifiers during preprocessing and use structured lookup or exact filters when the identifier is authoritative. For mixed natural-language and keyword queries, I would evaluate BM25 alongside dense retrieval and combine their ranked results. BM25 depends on tokenization, so I would verify how codes and punctuation are indexed instead of assuming every identifier is preserved.
+
+## 12. Is BM25 a dense embedding method, and where are its data stored?
+
+**Answer:** Standard BM25 is a lexical ranking function based on term matches, term frequency, document frequency, and document length. It is not a neural dense embedding model.
+
+A lexical search system typically stores an inverted index: terms map to postings identifying documents containing those terms, with statistics needed for scoring. Dense retrieval stores numerical vectors in a vector index. A search engine may support both types of indexes, but they represent and retrieve information differently. Hybrid retrieval combines evidence from both approaches.
+
+## 13. Why not embed an entire document if it fits within the model's token limit?
+
+**Answer:** The token limit specifies what the model can accept, not the best retrieval unit. A long document can contain several unrelated topics, and one vector may not represent a small but important passage well enough. Retrieving the entire document can also consume unnecessary generation context.
+
+I would select chunk boundaries that preserve coherent meaning and useful context, then evaluate chunk sizes on real questions. There is no universal optimum of 100-500 tokens, and sentence-level chunks are not inherently wrong. The right size depends on document structure, query granularity, and the surrounding retrieval design.
+
+## 14. How should text be preprocessed before embedding?
+
+**Answer:** I would remove extraction artifacts, repeated boilerplate where appropriate, and accidental formatting noise while preserving information that affects meaning. That includes identifiers, numbers, negation, units, meaningful punctuation, and useful headings.
+
+I would not automatically apply traditional keyword preprocessing such as stopword removal or stemming. For example, removing "not" can reverse an instruction. Case normalization and Unicode normalization should be chosen deliberately because code, acronyms, and identifiers can be sensitive to those changes. I would version the preprocessing pipeline and inspect representative before-and-after examples.
+
+## 15. What should be stored alongside an embedding?
+
+**Answer:** I would store a stable chunk ID, document ID and version, the original chunk text or a reliable text reference, source location, relevant filter metadata, access-control information, a content hash, and the embedding configuration.
+
+The configuration should identify the model, dimensions, and preprocessing version so vectors can be traced and rebuilt. Source text enables grounded answers and citations; metadata supports filtering and lifecycle operations. Permissions must be enforced by the retrieval system. Embedding a permission label into the text does not enforce access control.
+
+## 16. How should document embedding and query embedding be separated in production?
+
+**Answer:** I would embed documents during ingestion and update processing, then persist their vectors in the search index. At query time, I would embed the user's query, search the existing index with the required filters, and retrieve the associated passages.
+
+Re-embedding every document for each query creates unnecessary latency and cost. The online and ingestion paths should use compatible embedding configurations, but their scaling and failure handling can be managed separately. A temporary ingestion backlog should be observable without forcing every query to repeat ingestion work.
+
+## 17. What makes a safe embedding cache key?
+
+**Answer:** The key must identify the exact embedding computation. I would include a hash of the actual text sent to the encoder together with the model or available model revision, dimensions, preprocessing version, and any input mode or instruction that changes the output.
+
+A text-only key can return a vector from the wrong configuration after an upgrade. The cache also needs defined capacity, eviction, persistence, and tenant-isolation behavior where required. In Python, I would avoid a mutable default such as `cache={}` and pass an explicitly managed cache object. Cache reuse must never bypass authorization when retrieving source content.
+
+## 18. How would you handle document updates and deletions?
+
+**Answer:** I would track source versions and detect changed content. After parsing and chunking an updated document, I would reuse embeddings for unchanged chunks where the embedding input and configuration are identical, generate embeddings for changed chunks, and remove obsolete chunks.
+
+Edits can shift chunk boundaries, so replacing only the visibly edited sentence is not always sufficient. I would make ingestion idempotent and use a version-aware publication strategy so queries do not accidentally combine incompatible versions. Deletions and permission changes must also propagate to retrieval and relevant caches. I would monitor how long source changes take to become searchable.
+
+## 19. How would you migrate embedding models without breaking search?
+
+**Answer:** I would build a separate index with the new model and backfill the corpus. During the migration, I would capture source updates so the new index does not become stale. I would compare both systems using labeled queries and, where appropriate, shadow live queries without exposing experimental answers.
+
+Once quality and operational targets are met, I would switch the query encoder and its matching index together through a controlled routing change. I would retain the previous configuration for rollback. Old and new vectors must not be compared directly unless the models are explicitly designed to share a compatible space.
+
+## 20. How would you batch embedding requests efficiently?
+
+**Answer:** I would batch by both input count and token budget, while respecting per-input limits, total request limits, and account rate limits. I would use bounded concurrency and preserve the mapping between each input and its returned vector.
+
+As checked on September 27, 2026, the [OpenAI embeddings API reference](https://developers.openai.com/api/reference/resources/embeddings/methods/create) lists an 8,192-token limit per input, up to 2,048 text inputs in an array, and 300,000 total tokens per request. A batch of 2,048 chunks at 500 tokens each would exceed the total-token limit.
+
+Putting multiple texts in an ordinary request reduces overhead; it does not automatically discount token charges. A separate asynchronous batch product can have different pricing and completion-time constraints.
+
+## 21. How would you handle rate limits and partial ingestion failures?
+
+**Answer:** I would limit request concurrency and token throughput, retry transient failures with exponential backoff and jitter, and honor server retry guidance when available. Invalid inputs or other permanent errors should be recorded and corrected rather than retried indefinitely.
+
+I would checkpoint completed work and use stable IDs with idempotent upserts so retrying a batch does not create duplicate index entries. I would track failure rate, retry volume, ingestion lag, and token usage. Launching one asynchronous task for every document at once can overwhelm the provider and the client, even though the code is asynchronous.
+
+## 22. How would you estimate vector memory and decide whether to reduce dimensions?
+
+**Answer:** For uncompressed float32 vectors, the raw storage estimate is:
+
+```text
+bytes = number_of_vectors × dimensions × 4
+
+1,000,000 × 1,536 × 4 = 6,144,000,000 bytes = 6.144 GB
+1,000,000 ×   512 × 4 = 2,048,000,000 bytes = 2.048 GB
+```
+
+These are decimal gigabytes and exclude index structures, metadata, text, replicas, and runtime overhead. I would benchmark supported dimension reduction and quantization separately because they can affect retrieval quality differently. Arbitrarily truncating vectors is not safe for every model.
+
+For OpenAI models supporting the `dimensions` parameter, fewer output dimensions reduce vector storage, but input-token billing is not automatically reduced. See the [embeddings guide](https://developers.openai.com/api/docs/guides/embeddings).
+
+## 23. Does an embedding similarity heatmap prove that retrieval quality is good?
+
+**Answer:** No. A similarity matrix contains the selected pairwise similarity scores for the embedded texts. It can reveal duplicates, clusters, or unexpected relationships, but it does not establish that real customer queries retrieve the correct evidence. It also does not preserve all information in the source text.
+
+I would use it as a diagnostic and validate retrieval with labeled queries. A full matrix has quadratic storage growth as the number of vectors increases. Visualizations also need appropriate scales: cosine scores can be negative, so a fixed zero-to-one color scale can hide meaningful differences.
+
+## 24. A customer says, "The chatbot retrieves related articles but still gives the wrong troubleshooting steps." How would you investigate?
+
+**Answer:** I would collect representative failed questions, expected answers, relevant source passages, and traces showing the retrieved context. Then I would locate the failure stage.
+
+If the correct evidence is absent from the corpus, I would fix ingestion or source coverage. If it is present but not retrieved, I would inspect filters, chunking, model compatibility, exact-search results, and identifier handling. If it is retrieved but ranked too low, I would evaluate ranking changes or a reranker. If the correct evidence reaches the generator but the answer is wrong, I would investigate generation and evidence use.
+
+I would turn the failures into a regression set, make targeted changes, and compare retrieval quality, answer correctness, latency, and cost before rollout.
